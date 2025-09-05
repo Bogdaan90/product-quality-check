@@ -33,21 +33,20 @@ PROMPT_OPTIONS = {
             • Input may be valid JSON OR arbitrary text. If JSON parsing fails, treat the field as plain text and proceed; never error.
             • Parse recursively (objects/arrays/strings). From any text, EXTRACT EVERY numeric token that carries a MASS or VOLUME unit (µg/ug, mg, g, kg, ml, L/l). For mixed strings, extract EACH token separately (e.g., "12mg / 6mg" ⇒ two tokens).
             • Ignore non-mass/volume units (kJ, kcal, %NRV, IU) and ratios (e.g., mg/100ml). Do NOT convert ratios into standalone magnitudes.
-            • Keep duplicates; do not collapse repeated nutrient types (e.g., two “Carbohydrates” values).
-            • Preserve nutrient type labels as found (e.g., “of which saturates”, “Saturates”, “Sugar”, “of which sugars”).
+            • Keep duplicates; do not collapse repeated nutrient types. Preserve nutrient labels exactly as found (e.g., “of which saturates” vs “Saturates”).
             
             Handling an explicit basis (“per 100 g/ml”) — SCALE BEFORE COMPARISON:
-            • Detect basis phrases such as "Per 100 g", "Per 100g", "Average Values Per 100g", "Typical Values per 100 ml", etc. (case-insensitive; tolerate spacing/colons).
+            • Detect basis text such as "Per 100 g", "Per 100g", "Average Values Per 100g", "Typical Values per 100 ml", etc. (case-insensitive; tolerate spacing/colons).
             • When a matching basis exists for the serving’s dimension:
               – BASIS = 100 g (mass) or 100 ml (volume).
               – For each comparable nutrient token with value V_token (normalized to the internal comparison unit), compute per-serving:
                   V_serving = V_token × (Serving_size / BASIS)
-              – Use V_serving for ALL comparisons and for the simplified nutritional_values output.
+              – Use V_serving for ALL comparisons. (You may list original per-100 values in nutritional_values; comparisons must use scaled values.)
             • If a basis exists but the dimension mismatches (e.g., basis ml, serving g), mark tokens as not comparable (no cross-dimension conversion).
             • If NO basis text exists, compare tokens AS WRITTEN (no scaling).
             
             Deterministic comparisons (ANY-exceedance semantics; decision derived ONLY from post-scaling comparisons):
-            • Define EXCEEDS ⇢ nutrient_value_normalized ≥ serving_size_normalized (use numeric comparisons; not strings; tolerance ε = 1e-9).
+            • Comparator: define EXCEEDS ⇢ nutrient_value_normalized ≥ serving_size_normalized, with numeric comparison and tolerance ε = 1e-9 (treat |a−b|≤ε as equal ⇒ EXCEEDS).
             • BUILD ALL comparisons AFTER any necessary scaling; NEVER compute the top-level decision from raw (unscaled) tokens.
             • Top-level decision:
               – COMPARABLE = tokens in the same dimension as the serving size.
@@ -57,16 +56,19 @@ PROMPT_OPTIONS = {
             • Consistency guardrails:
               – If "exceeding_values" is empty, the top-level MUST NOT be "Yes".
               – If "exceeding_values" is non-empty, the top-level MUST be "Yes".
-              – The top-level MUST be computed AFTER `comparisons` and `exceeding_values` are finalized for the row.
+              – Compute the top-level ONLY after finalizing `comparisons` and `exceeding_values`.
             
             Worked checks (lock these behaviours):
             • quantity = "50 g"; nutritionals include "… Fat 30.0g, Carbohydrates 50.0g …" with "Per 100g".
               – Serving_size = 50 g; BASIS = 100 g.
               – Carbohydrates per-serving = 50.0 × (50/100) = 25.0 g.
-              – All scaled nutrients < 50 g ⇒ comparisons all "does_not_exceed"; `exceeding_values=[]`; top-level "No".
+              – All scaled nutrients < 50 g ⇒ all comparisons "does_not_exceed"; `exceeding_values=[]`; top-level "No".
             • quantity = "30 g"; nutritionals include "Carbohydrates 120.0g" with "Per 100g".
               – Carbohydrates per-serving = 120.0 × (30/100) = 36.0 g.
               – 36.0 g ≥ 30 g ⇒ mark "Carbohydrates" as "exceeds"; `exceeding_values` contains it; top-level "Yes".
+            • quantity = "25 g"; nutritionals include "Fat 100.0g" with "Per 100g".
+              – Fat per-serving = 100.0 × (25/100) = 25.0 g.
+              – 25.0 g ≥ 25.0 g (within ε) ⇒ "exceeds" and top-level "Yes".
             
             Output (strict JSON only):
             {
@@ -1653,6 +1655,7 @@ PROMPT_OPTIONS = {
         "description": "Write your own prompt below."
     }
 }
+
 
 
 
