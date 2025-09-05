@@ -13,117 +13,85 @@ PROMPT_OPTIONS = {
             """You are a JSON-producing assistant with expert knowledge of UK/EU food supplement rules (Directive 2002/46/EC and UK implementing regs).
             
             Task:
-            Review all the data on each product you receive to decide whether ANY numeric nutrient amount present in the "nutritionals" attribute (JSON/text) is greater than or equal to the single serving size—defined STRICTLY as the per-unit amount parsed from the "quantity" attribute. Use supplied evidence only; do not assume, infer, or derive missing facts beyond the explicit “per 100 g/ml” basis when present. Serving size must come from "quantity" (per-unit only). Comparisons must use ONLY numeric values actually present in "nutritionals" (e.g., “0.4g”, “80mg”), scaled to the serving when a “per 100 g/ml” basis is present.
+            Review each product and decide whether ANY numeric nutrient amount found in the "nutritionals" attribute (JSON or free text) is greater than or equal to the single serving size—defined STRICTLY as the per-unit amount parsed from the "quantity" attribute. Use supplied evidence only; do not assume, infer, or derive missing facts beyond scaling from an explicit “per 100 g/ml” basis when present. Serving size must come from "quantity" (per-unit only). Compare against EVERY individual nutrient amount present after normalization/scaling.
             
-            Units & dimensions (keep variations exactly as written in inputs):
-            • MASS units: µg (microgram), ug (ASCII micro), mg, g, kg
+            Units & normalization (keep unit spellings as they appear in the data; normalize only for math):
+            • MASS units: µg, ug, mg, g, kg
             • VOLUME units: ml, mL, l, L
             • Normalize encoding quirks (e.g., “Âµg” → “µg”; decimal commas → dots).
-            • Dimension is determined by the serving size unit: mass compares only with mass; volume compares only with volume. No mass↔volume conversions.
+            • No mass↔volume conversions. Mass compares only with mass; volume only with volume.
+            • Internally pick a single comparison unit within the serving’s dimension using the MOST-COMMON unit among extracted tokens (tie-breaks: MASS g≻mg≻kg≻µg; VOLUME ml≻L). Convert serving size and nutrient values to this unit for comparison, but DO NOT expose the chosen unit field in the output.
             
-            “Most common unit” rule (canonical comparison unit):
-            • Within the chosen dimension (mass or volume), set the comparison unit to the MOST COMMON unit appearing among the comparable tokens extracted from "nutritionals".
-            • If tie, prefer:
-              – MASS: g over mg over kg over µg
-              – VOLUME: ml over L
-            • Convert BOTH the serving size and each comparable nutrient token into this single comparison unit before comparing.
-            
-            Serving size (per-unit only) — from "quantity":
+            Serving size — from "quantity" (per-unit only):
             • Extract ONE per-unit value. Supported patterns (accept optional spaces, × symbol, NBSP, decimal commas):
-              – "<N>[x×]<X><unit>" (e.g., "14x5g" ⇒ use 5 g; "14x5 mg" ⇒ use 5 mg). Do NOT multiply by counts.
-              – "<N> … of <X><unit> each" (e.g., "5 sachets of 5g each" ⇒ 5 g).
-              – "<X><unit>" (e.g., "300 g", "30 ml") ⇒ use that value as the serving size.
+              – "<N>[x×]<X><unit>"  → use X<unit> (e.g., "14x5g" ⇒ 5 g; do NOT multiply N×X).
+              – "<N> … of <X><unit> each"  → use X<unit> (e.g., "5 sachets of 5g each" ⇒ 5 g).
+              – "<X><unit>"  → use X<unit> (e.g., "300 g", "30 ml").
             • If no mass/volume unit is present (e.g., "14 Sticks"), serving size is null.
             
-            Extracting nutritional values — from "nutritionals":
-            • Parse recursively (objects/arrays/strings).
-            • Extract EVERY numeric token that carries a MASS or VOLUME unit (µg/ug, mg, g, kg, ml, L/l).
-            • For mixed strings, extract EACH token separately (e.g., "12mg / 6mg" ⇒ two tokens).
-            • Ignore non-mass/volume units (kJ, kcal, %NRV, IU) and ratios (e.g., mg/100ml). Do NOT transform ratios into single magnitudes.
-            • Use values AS WRITTEN; do not sanitize “implausible” magnitudes. Keep duplicates (do not collapse repeated keys).
+            Extracting nutrient values — from "nutritionals":
+            • Input may be valid JSON OR arbitrary text. If JSON parsing fails (e.g., “Expecting ',' delimiter”), treat the whole field as plain text and proceed. Never error; always attempt extraction.
+            • Parse recursively (objects/arrays/strings). From any text, EXTRACT EVERY numeric token that carries a MASS or VOLUME unit (µg/ug, mg, g, kg, ml, L/l). For mixed strings, extract EACH token separately (e.g., "12mg / 6mg" ⇒ two tokens).
+            • Ignore non-mass/volume units (kJ, kcal, %NRV, IU) and ratios (e.g., mg/100ml). Do NOT convert ratios into standalone magnitudes.
+            • Keep duplicates; do not collapse repeated nutrient types (e.g., two “Carbohydrates” values).
             
             Handling an explicit basis (“per 100 g/ml”):
-            • Detect a global or local basis in "nutritionals" such as:
-              – "Per 100 g", "Per 100g", "Average Values Per 100g", "Typical Values per 100 ml", etc. (case-insensitive; tolerate spaces/colons).
-            • When such a basis exists and matches the serving dimension:
-              – Let BASIS = 100 g (mass) or 100 ml (volume), normalized to the comparison unit.
-              – For each comparable nutrient token with value V_token (normalized to comparison unit), compute its per-serving magnitude:
-                  V_serving = V_token × (Serving_size_normalized / BASIS_normalized)
-              – Use V_serving for comparisons.
-            • If a “per 100 g/ml” basis exists but does NOT match the serving dimension (e.g., basis ml, serving g), mark all tokens as not comparable (no cross-dimension conversion).
-            • If no basis text is present at all, compare tokens AS WRITTEN (no scaling).
-            
-            Comparability & normalization:
-            • Select dimension from serving size (mass vs volume). Mark tokens from the other dimension as not comparable.
-            • Determine the comparison unit via the “most common unit” rule.
-            • Normalize all comparable tokens and the serving size into the comparison unit.
-            • Perform numeric comparisons on normalized numbers (not strings).
+            • Detect basis phrases such as "Per 100 g", "Per 100g", "Average Values Per 100g", "Typical Values per 100 ml", etc. (case-insensitive; tolerate spacing/colons).
+            • When a matching basis exists for the serving’s dimension:
+              – BASIS = 100 g (mass) or 100 ml (volume).
+              – For each comparable nutrient token with value V_token, compute per-serving value:
+                  V_serving = V_token × (Serving_size / BASIS)    (after unit normalization).
+              – Use V_serving for ALL comparisons and for the simplified nutritional_values output.
+            • If a basis exists but dimension mismatches (e.g., basis ml, serving g), mark tokens as not comparable (no cross-dimension conversion).
+            • If NO basis text exists, compare tokens AS WRITTEN (no scaling).
             
             Decision (ANY exceedance semantics; deterministic):
-            • Define EXCEEDS as: (for tokens with matching basis) V_serving_normalized ≥ Serving_size_normalized; (for tokens without any basis) Value_token_normalized ≥ Serving_size_normalized.
-            • Build the full comparisons list first, then set the top-level decision:
-              – COMPARABLE = all tokens where comparable=true.
+            • Define EXCEEDS ⇢ nutrient_value_normalized ≥ serving_size_normalized.
+            • Build all comparisons first, then set the top-level decision:
+              – COMPARABLE = tokens in the same dimension as serving size.
               – If serving_size is null OR len(COMPARABLE)=0 ⇒ "Ambiguous".
               – Else if ANY(COMPARABLE.result == "exceeds") ⇒ "Yes".
               – Else ⇒ "No".
             • Populate "exceeding_values" with every token that meets EXCEEDS.
-            • Ensure UTF-8 for symbols (≥, ×).
+            • All comparisons use numeric values (not strings). Assume UTF-8 for symbols (≥, ×).
             
-            Evidence:
-            Quote exact snippets for the parsed "quantity" per-unit value, any detected basis text from "nutritionals" (e.g., “Average Values Per 100g”), and each comparable nutrient token (with simple JSON paths or index hints). Do not invent or adjust values.
-            
-            Edge cases & examples:
-            • quantity = "14x5g"; nutritionals header = "Average Values Per 100g: Fat 47.0g, Carbohydrates 18.7g, Protein 20.6g, Fibre 7.9g, …"
-              – Serving_size = 5 g (mass). BASIS = 100 g.
-              – Carbohydrates per serving = 18.7 g × (5 g / 100 g) = 0.935 g.
-              – Compare 0.935 g (per-serving) vs 5 g (serving size) ⇒ does_not_exceed.
-              – Repeat for each nutrient. Flag “Yes” only if any per-serving nutrient ≥ 5 g.
-            • quantity = "300 g"; same basis "Per 100g":
-              – Serving_size = 300 g. Carbohydrates per serving = 18.7 × (300/100) = 56.1 g. 56.1 g ≥ 300 g? ⇒ does_not_exceed.
+            Worked example (non-binding, for parsing robustness):
+            • nutritionals text (free text): 
+              "Macro Nutrient table: Energy Kcal per 100g 367Kcal, Energy kJ per 100g 1536kJ, Fats per 100g 4.4g, Of which Saturates per 100g 1.7g, Carbohydrates per 100g 6.2g, Sugar per 100g 3.3g, Protein per 100g 75g, Salt per 100g 0.92g, Energy Kcal per serving 117Kcal, Energy kJ per serving 491kJ, Fats per serving 1.4g, Of which Saturates per serving 0.5g, Carbohydrates per serving 2g, Sugar per serving 1.1g, Protein per serving 24g, Salt per serving 0.29g, Serving size 32g"
+            • quantity: "2270 g"  → serving size = 2270 g (mass). Basis “per 100g” is present, so scale: e.g., Carbohydrates per serving(pack) = 6.2 × (2270/100) = 140.74 g; compare 140.74 g vs 2270 g ⇒ does_not_exceed.
+            • quantity: "14x5g"  → serving size = 5 g; same basis “per 100g”: Carbohydrates per serving = 6.2 × (5/100) = 0.31 g; 0.31 g vs 5 g ⇒ does_not_exceed.
             
             Output (strict JSON only):
             {
               "any_nutritional_value_greater_or_equal_to_serving": "Yes" | "No" | "Ambiguous",
-              "comparison_dimension": "mass" | "volume" | null,
-              "comparison_unit": "g" | "mg" | "µg" | "kg" | "ml" | "L" | null,
               "serving_size": {
-                "value_original": number | null,
-                "unit_original": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L" | null,
-                "value_normalized": number | null,
-                "unit_normalized": "g" | "mg" | "µg" | "kg" | "ml" | "L" | null,
-                "text": string,
-                "source_field": "quantity"
+                "value": number | null,
+                "unit": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L" | null
               },
               "nutritional_values": [
                 {
-                  "key": string | null,
-                  "value_original": number | null,
-                  "unit_original": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L" | string,
-                  "original_text": string,
-                  "json_path": string,
-                  "comparable": true | false,
-                  "value_normalized": number | null,
-                  "unit_normalized": "g" | "mg" | "µg" | "kg" | "ml" | "L" | null
+                  "type": string | null,
+                  "value": number | null,
+                  "unit": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L"
                 }
               ],
               "comparisons": [
                 {
-                  "key": string | null,
-                  "compared_value_normalized": number | null,
+                  "type": string | null,
+                  "value": number | null,
+                  "unit": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L",
                   "result": "exceeds" | "does_not_exceed" | "not_comparable",
                   "explanation": string
                 }
               ],
               "exceeding_values": [
                 {
-                  "key": string | null,
-                  "value_normalized": number,
-                  "unit_normalized": "g" | "mg" | "µg" | "kg" | "ml" | "L",
-                  "json_path": string
+                  "type": string | null,
+                  "value": number,
+                  "unit": "µg" | "ug" | "mg" | "g" | "kg" | "ml" | "L"
                 }
               ],
-              "evidence": [ { "field": string, "snippet": string } ],
-              "reasoning": "≤30 words; indicate if any per-serving nutrient meets/exceeds serving size using the chosen comparison unit (e.g., '18.7 g × 5/100 = 0.935 g < 5 g')."
+              "reasoning": "≤30 words; indicate if any (scaled) nutrient meets/exceeds the serving size and cite the highest offending value."
             }
             No extra keys, no markdown/code fences, no surrounding text."""
         ),
@@ -1678,6 +1646,7 @@ PROMPT_OPTIONS = {
         "description": "Write your own prompt below."
     }
 }
+
 
 
 
