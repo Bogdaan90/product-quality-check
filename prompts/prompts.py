@@ -20,11 +20,11 @@ PROMPT_OPTIONS = {
             • VOLUME units: ml, mL, l, L
             • Normalize encoding quirks (e.g., “Âµg”→“µg”; decimal commas→dots).
             • No mass↔volume conversions. Mass compares only with mass; volume only with volume.
-            • Internally, within the serving’s dimension, pick a single comparison unit using the MOST-COMMON unit among extracted tokens (tie-breaks: MASS g≻mg≻kg≻µg; VOLUME ml≻L). Convert serving size and nutrient values to this unit for comparison, but DO NOT expose that internal choice in the output.
+            • Internally (not in output), pick a single comparison unit within the serving’s dimension using the MOST-COMMON unit among extracted tokens (ties: MASS g≻mg≻kg≻µg; VOLUME ml≻L). Convert the serving size and nutrient values to this unit for comparison.
             
             Serving size — from "quantity" (per-unit only):
             • Extract ONE per-unit value. Supported patterns (accept optional spaces, × symbol, NBSP, decimal commas):
-              – "<N>[x×]<X><unit>"  → use X<unit> (e.g., "14x5g" ⇒ use 5 g; do NOT multiply N×X).
+              – "<N>[x×]<X><unit>"  → use X<unit> (e.g., "14x5g" ⇒ 5 g; do NOT multiply N×X).
               – "<N> … of <X><unit> each"  → use X<unit> (e.g., "5 sachets of 5g each" ⇒ 5 g).
               – "<X><unit>"  → use X<unit> (e.g., "300 g", "30 ml").
             • If no mass/volume unit is present (e.g., "14 Sticks"), serving size is null.
@@ -42,25 +42,28 @@ PROMPT_OPTIONS = {
               – For each comparable nutrient token with value V_token, compute per-serving value:
                   V_serving = V_token × (Serving_size / BASIS)   (after unit normalization).
               – Use V_serving for ALL comparisons and for the simplified nutritional_values output.
-            • If a basis exists but dimension mismatches (e.g., basis ml, serving g), mark tokens as not comparable (no cross-dimension conversion).
+            • If a basis exists but the dimension mismatches (e.g., basis ml, serving g), mark tokens as not comparable (no cross-dimension conversion).
             • If NO basis text exists, compare tokens AS WRITTEN (no scaling).
             
             Deterministic comparisons (ANY-exceedance semantics):
             • Define EXCEEDS ⇢ nutrient_value_normalized ≥ serving_size_normalized.
-            • Build all comparisons first, then set the top-level decision:
-              – COMPARABLE = tokens in the same dimension as serving size.
+            • Build ALL comparisons AFTER any necessary scaling; do NOT compute the top-level decision from raw (unscaled) tokens.
+            • Top-level decision:
+              – COMPARABLE = tokens in the same dimension as the serving size.
               – If serving_size is null OR len(COMPARABLE)=0 ⇒ "Ambiguous".
               – Else if ANY(COMPARABLE.result == "exceeds") ⇒ "Yes".
               – Else ⇒ "No".
-            • Populate "exceeding_values" with every token that meets EXCEEDS.
+            • Consistency rule:
+              – If "exceeding_values" is empty, the top-level MUST NOT be "Yes".
+              – If "exceeding_values" is non-empty, the top-level MUST be "Yes".
             • All comparisons must use numeric values (not strings). Assume UTF-8 for symbols (≥, ×).
             
             Worked checks (to avoid inversion bugs):
-            • quantity = "30 g"; nutritionals includes "Carbohydrates 120.0g" with "Per 100g".
+            • quantity = "30 g"; nutritionals include "Carbohydrates 120.0g" with "Per 100g".
               – Serving_size = 30 g. BASIS = 100 g.
               – Carbohydrates per-serving = 120.0 × (30/100) = 36.0 g.
               – 36.0 g ≥ 30 g ⇒ mark "Carbohydrates" as "exceeds" and set top-level "Yes".
-            • quantity = "50 g"; nutritionals includes "Carbohydrates 50.0g" with "Per 100g".
+            • quantity = "50 g"; nutritionals include "Carbohydrates 50.0g" with "Per 100g".
               – Serving_size = 50 g. BASIS = 100 g.
               – Carbohydrates per-serving = 50.0 × (50/100) = 25.0 g.
               – All scaled nutrients < 50 g ⇒ top-level "No" (not "Yes").
@@ -1650,6 +1653,7 @@ PROMPT_OPTIONS = {
         "description": "Write your own prompt below."
     }
 }
+
 
 
 
