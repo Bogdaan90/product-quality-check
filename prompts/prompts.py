@@ -20,7 +20,7 @@ PROMPT_OPTIONS = {
             • VOLUME units: ml, mL, l, L
             • Normalize encoding quirks (e.g., “Âµg”→“µg”; decimal commas→dots).
             • No mass↔volume conversions. Mass compares only with mass; volume only with volume.
-            • Internally pick a single comparison unit within the serving’s dimension using the MOST-COMMON unit among extracted tokens (tie-breaks: MASS g≻mg≻kg≻µg; VOLUME ml≻L). Convert serving size and nutrient values to this unit for comparison, but DO NOT expose that internal choice in the output.
+            • Internally, within the serving’s dimension, pick a single comparison unit using the MOST-COMMON unit among extracted tokens (tie-breaks: MASS g≻mg≻kg≻µg; VOLUME ml≻L). Convert serving size and nutrient values to this unit for comparison, but DO NOT expose that internal choice in the output.
             
             Serving size — from "quantity" (per-unit only):
             • Extract ONE per-unit value. Supported patterns (accept optional spaces, × symbol, NBSP, decimal commas):
@@ -55,11 +55,15 @@ PROMPT_OPTIONS = {
             • Populate "exceeding_values" with every token that meets EXCEEDS.
             • All comparisons must use numeric values (not strings). Assume UTF-8 for symbols (≥, ×).
             
-            Worked check (to avoid inversion bugs):
-            • quantity = "30 g"; nutritionals = "… Carbohydrates 120.0g …" with "Per 100g".
-              – Serving_size = 30 g (mass). BASIS = 100 g.
+            Worked checks (to avoid inversion bugs):
+            • quantity = "30 g"; nutritionals includes "Carbohydrates 120.0g" with "Per 100g".
+              – Serving_size = 30 g. BASIS = 100 g.
               – Carbohydrates per-serving = 120.0 × (30/100) = 36.0 g.
-              – Since 36.0 g ≥ 30 g ⇒ mark "Carbohydrates" as "exceeds" and set top-level "Yes".
+              – 36.0 g ≥ 30 g ⇒ mark "Carbohydrates" as "exceeds" and set top-level "Yes".
+            • quantity = "50 g"; nutritionals includes "Carbohydrates 50.0g" with "Per 100g".
+              – Serving_size = 50 g. BASIS = 100 g.
+              – Carbohydrates per-serving = 50.0 × (50/100) = 25.0 g.
+              – All scaled nutrients < 50 g ⇒ top-level "No" (not "Yes").
             
             Output (strict JSON only):
             {
@@ -1646,6 +1650,7 @@ PROMPT_OPTIONS = {
         "description": "Write your own prompt below."
     }
 }
+
 
 
 
