@@ -8,7 +8,7 @@ PROMPT_OPTIONS = {
         "description": "No pre-written prompt selected."
     },
     "INCOMPLETE: Hierarchy": {
-                "prompt": (
+            "prompt": (
                 "SYSTEM MESSAGE:\n"
                 """You are a JSON-producing assistant tasked with classifying FP&A categories (not products) into three compliance buckets. Operate deterministically, using only the category text provided.\n\n
                 ## Objective\n
@@ -1742,6 +1742,7 @@ PROMPT_OPTIONS = {
         "description": "Write your own prompt below."
     }
 }
+
 
 
 
